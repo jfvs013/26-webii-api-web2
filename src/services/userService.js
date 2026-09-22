@@ -1,4 +1,6 @@
 import prisma from "../config/database.js";
+import { ConflictError } from "../errors/ConflictError.js";
+import { NotFoundError } from "../errors/NotFoundError.js";
 
 const publicUserSelect = {
   id: true,
@@ -31,33 +33,42 @@ export const getAllUsers = async () => {
 /**
  * Busca um usuário pelo identificador único.
  * @param {number} userId - ID do usuário.
- * @returns {Promise<Object|null>} Usuário encontrado ou `null` quando ele não existe.
+ * @returns {Promise<Object>} Usuário encontrado.
+ * @throws {NotFoundError} Quando o usuário não existe.
  */
 export const getUserById = async (userId) => {
-  return prisma.user.findUnique({
+  const usuario = await prisma.user.findUnique({
     where: { id: userId },
     select: publicUserSelect,
   });
+
+  if (!usuario) {
+    throw new NotFoundError(`Usuário com ID ${userId} não encontrado`);
+  }
+
+  return usuario;
 };
 
 /**
  * Cria um usuário depois de normalizar o e-mail e verificar a sua unicidade.
- * @param {{ nome: string, email: string, papel?: string, foto?: string|null }} userData - Dados recebidos pelo controller.
- * @returns {Promise<{ ok: boolean, data?: Object, reason?: string }>} Resultado da criação ou o motivo do conflito.
+ * @param {{ nome: string, email: string, papel?: string, foto?: string|null }} userData
+ * @returns {Promise<Object>} Usuário criado.
+ * @throws {ConflictError} Quando o e-mail já está cadastrado.
  */
 export const createUser = async (userData) => {
   const email = normalizeEmail(userData.email);
+
   const emailOwner = await prisma.user.findUnique({
     where: { email },
     select: { id: true },
   });
 
   if (emailOwner) {
-    return { ok: false, reason: "EMAIL_CONFLICT" };
+    throw new ConflictError("Email já cadastrado no sistema");
   }
 
   try {
-    const usuario = await prisma.user.create({
+    return await prisma.user.create({
       data: {
         nome: userData.nome.trim(),
         email,
@@ -66,11 +77,9 @@ export const createUser = async (userData) => {
       },
       select: publicUserSelect,
     });
-
-    return { ok: true, data: usuario };
   } catch (error) {
     if (error.code === "P2002") {
-      return { ok: false, reason: "EMAIL_CONFLICT" };
+      throw new ConflictError("Email já cadastrado no sistema");
     }
 
     throw error;
@@ -80,8 +89,10 @@ export const createUser = async (userData) => {
 /**
  * Atualiza somente os campos enviados para um usuário existente.
  * @param {number} userId - ID do usuário a atualizar.
- * @param {{ nome?: string, email?: string, papel?: string, foto?: string|null }} userData - Campos permitidos no PATCH.
- * @returns {Promise<{ ok: boolean, data?: Object, reason?: string }>} Resultado da atualização, inexistência ou conflito de e-mail.
+ * @param {{ nome?: string, email?: string, papel?: string, foto?: string|null }} userData
+ * @returns {Promise<Object>} Usuário atualizado.
+ * @throws {NotFoundError} Quando o usuário não existe.
+ * @throws {ConflictError} Quando o novo e-mail já pertence a outro usuário.
  */
 export const updateUser = async (userId, userData) => {
   const usuarioExistente = await prisma.user.findUnique({
@@ -90,7 +101,7 @@ export const updateUser = async (userId, userData) => {
   });
 
   if (!usuarioExistente) {
-    return { ok: false, reason: "NOT_FOUND" };
+    throw new NotFoundError(`Usuário com ID ${userId} não encontrado`);
   }
 
   const data = {};
@@ -101,13 +112,14 @@ export const updateUser = async (userId, userData) => {
 
   if (Object.hasOwn(userData, "email")) {
     const email = normalizeEmail(userData.email);
+
     const emailOwner = await prisma.user.findUnique({
       where: { email },
       select: { id: true },
     });
 
     if (emailOwner && emailOwner.id !== userId) {
-      return { ok: false, reason: "EMAIL_CONFLICT" };
+      throw new ConflictError("Email já cadastrado no sistema");
     }
 
     data.email = email;
@@ -122,16 +134,14 @@ export const updateUser = async (userId, userData) => {
   }
 
   try {
-    const usuario = await prisma.user.update({
+    return await prisma.user.update({
       where: { id: userId },
       data,
       select: publicUserSelect,
     });
-
-    return { ok: true, data: usuario };
   } catch (error) {
     if (error.code === "P2002") {
-      return { ok: false, reason: "EMAIL_CONFLICT" };
+      throw new ConflictError("Email já cadastrado no sistema");
     }
 
     throw error;
@@ -141,7 +151,9 @@ export const updateUser = async (userId, userData) => {
 /**
  * Remove um usuário que não possua matérias nem questões vinculadas.
  * @param {number} userId - ID do usuário a remover.
- * @returns {Promise<{ ok: boolean, data?: Object, reason?: string }>} Usuário removido ou o motivo que impede a remoção.
+ * @returns {Promise<Object>} Usuário removido.
+ * @throws {NotFoundError} Quando o usuário não existe.
+ * @throws {ConflictError} Quando o usuário possui matérias ou questões vinculadas.
  */
 export const deleteUser = async (userId) => {
   const usuarioExistente = await prisma.user.findUnique({
@@ -149,32 +161,33 @@ export const deleteUser = async (userId) => {
     select: {
       ...publicUserSelect,
       _count: {
-        select: { subjects: true, questions: true },
+        select: {
+          subjects: true,
+          questions: true,
+        },
       },
     },
   });
 
   if (!usuarioExistente) {
-    return { ok: false, reason: "NOT_FOUND" };
+    throw new NotFoundError(`Usuário com ID ${userId} não encontrado`);
   }
 
   if (
     usuarioExistente._count.subjects > 0 ||
     usuarioExistente._count.questions > 0
   ) {
-    return { ok: false, reason: "USER_IN_USE" };
+    throw new ConflictError("Usuário possui matérias ou questões vinculadas");
   }
 
   try {
-    const usuario = await prisma.user.delete({
+    return await prisma.user.delete({
       where: { id: userId },
       select: publicUserSelect,
     });
-
-    return { ok: true, data: usuario };
   } catch (error) {
     if (error.code === "P2003" || error.code === "P2014") {
-      return { ok: false, reason: "USER_IN_USE" };
+      throw new ConflictError("Usuário possui matérias ou questões vinculadas");
     }
 
     throw error;
