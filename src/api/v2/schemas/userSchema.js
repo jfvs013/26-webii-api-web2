@@ -1,4 +1,3 @@
-// ADICIONADO: valida somente o contrato V2, sem editar o schema HTTP da V1.
 import { z } from "zod";
 import { positiveIdSchema } from "../../../schemas/idSchema.js";
 
@@ -44,13 +43,14 @@ export const createUserV2Schema = z
   })
   .strict();
 
-/** Schema para PATCH /v2/users/:id. */
-export const updateUserV2Schema = z
-  .object(optionalV2Fields)
-  .strict()
-  .refine((data) => Object.keys(data).length > 0, {
-    message: "Envie pelo menos um campo para atualização",
-  });
+/** Campos textuais opcionais do PATCH /v2/users/:id, sem exigir ao menos um. */
+export const updateUserV2WithFileSchema = z.object(optionalV2Fields).strict();
+
+/** Schema para PATCH /v2/users/:id sem arquivo: ao menos um campo é obrigatório. */
+export const updateUserV2Schema = updateUserV2WithFileSchema.refine(
+  (data) => Object.keys(data).length > 0,
+  { message: "Envie pelo menos um campo para atualização" },
+);
 
 /** Schema para parâmetros :id positivos. */
 export const idParamSchema = z.object({ id: positiveIdSchema });
